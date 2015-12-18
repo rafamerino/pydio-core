@@ -11,12 +11,12 @@ module.exports = function(grunt) {
             }
         },
         uglify: {
-            options: {
-                mangle: false,
-                compress: {
-                    hoist_funs: false
-                }
-            },
+          options: {
+              mangle: false,
+              compress: {
+                  hoist_funs: false
+              }
+          },
             js: {
                 files: {
                     'res/js/pydio.min.js': [
@@ -253,7 +253,6 @@ module.exports = function(grunt) {
         'babel:dist',
         'uglify:js',
         'babel:materialui',
-//    'run:materialui',
         'env:build',
         'browserify',
         'env:dev',
