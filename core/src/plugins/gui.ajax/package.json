@@ -14,6 +14,7 @@
     "chart.js": "^1.0.2",
     "material-ui": "git://github.com/pydio/material-ui.git#pydio",
     "react": "0.13.3",
+    "react-tap-event-plugin": "0.1.7",
     "react-chartjs": "git://github.com/dehbmarques/react-chartjs.git#master",
     "react-grid-layout": "^0.8.5",
     "react-infinite": "^0.3.4",
