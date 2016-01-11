@@ -29,6 +29,7 @@ class AjxpMailer extends AJXP_Plugin
 {
 
     public $mailCache;
+    protected $_dibiDriver;
 
     public function init($options)
     {
@@ -41,22 +42,112 @@ class AjxpMailer extends AJXP_Plugin
             $p = ConfService::instanciatePluginFromGlobalParams($pConf, "AjxpMailer");
             AJXP_PluginsService::getInstance()->setPluginUniqueActiveForType($p->getType(), $p->getName(), $p);
         }
+        $this->_dibiDriver = AJXP_Utils::cleanDibiDriverParameters(array("group_switch_value"=>"core"));
     }
 
     public function processNotification(AJXP_Notification &$notification)
     {
         $mailer = AJXP_PluginsService::getInstance()->getActivePluginsForType("mailer", true);
-        if ($mailer !== false) {
+        /* BEGIN To the CRON */
+        dibi::connect($this->_dibiDriver);
+        if($this->_dibiDriver["driver"] == "postgre"){
+            dibi::query("SET bytea_output=escape");
+        }
+        $time = time();
+        try {
+            $querySQL = dibi::query("SELECT * FROM [ajxp_mail_queue] WHERE [date_event] <= %s", $time);
+        } catch (DibiException $e) {
+            throw new AJXP_Exception($e->getMessage());
+        }
+        $resultsSQL = $querySQL->fetchAll();
+        $arrayResultsSQL = array();
+        if (count($resultsSQL) > 0) {
+            foreach ($resultsSQL as $value) {
+                $ajxpNotification = unserialize($value["notification_object"]);
+                $ajxpNode = new AJXP_Node($value['url']);
+                $ajxpNode->loadNodeInfo();
+                if ($ajxpNode->isLeaf()) {
+                    $ajxpContent = $ajxpNode->getParent()->getPath();
+                } else {
+                    $ajxpContent = $ajxpNode->getPath();
+                    if ($ajxpContent === null) {
+                        $ajxpContent = '/';
+                    }
+                }
+                $ajxpAction = $ajxpNotification->getAction();
+                $ajxpAuthor = $ajxpNotification->getAuthor();
+                $ajxpNodeWorkspace = $ajxpNode->getRepository()->getDisplay();
+                $ajxpKey = $ajxpAction . "|" . $ajxpAuthor . "|" . $ajxpContent;
+                $arrayResultsSQL[$value['recipent']][$ajxpNodeWorkspace][$ajxpKey][] = $ajxpNotification;
+            }
+            //this $body must be here because we need this css
+            //$body = 'h1{font-size: 1.3em;border-bottom: 1px solid #555555;padding-bottom: 4px;font-weight: normal;color: #555555;}ul{list-style-type: none;padding: 0;margin-bottom: 50px;}*{font-family: Arial;font-size: 14px;color: #555;}li{margin: 20px 0px;}h1 em{font-size: 1em;color: #E35D52;font-weight: normal;}em{font-style: normal;font-weight: bold;}';
+            //make condition if the user want html mail or not
+            $body = '';
+            foreach ($arrayResultsSQL as $recipent => $arrayWorkspace) {
+                foreach ($arrayWorkspace as $workspace => $arrayAjxpKey) {
+                    $body = $body . '<h1>' . $arrayAjxpKey[key($arrayAjxpKey)][0]->getDescriptionLocation() . ', </h1><ul>';
+                    foreach ($arrayAjxpKey as $ajxpKey => $arrayNotif) {
+                        $body = $body . '<li>' . $arrayNotif[0]->getDescriptionLong(true) . ' (' . count($arrayNotif) . ')</li>';
+                    }
+                    $body = $body . '</ul>';
+                }
+                try {
+                    /*$mailer->sendMail(array($recipent),
+                        "Compte rendu Pydio",
+                        $body);*/
+                } catch (AJXP_Exception $e) {
+                    throw new AJXP_Exception($e->getMessage());
+                }
+            }
             try {
-                $mailer->sendMail(
-                    array($notification->getTarget()),
-                    $notification->getDescriptionShort(),
-                    $notification->getDescriptionLong(),
-                    $notification->getAuthor(),
-                    $notification->getMainLink()
-                );
-            } catch (Exception $e) {
-                $this->logError("Exception", $e->getMessage(), $e->getTrace());
+                //dibi::query('DELETE FROM [ajxp_mail_queue] WHERE [date_event] <= %s', $time);
+            } catch (DibiException $e) {
+                throw new AJXP_Exception($e->getMessage());
+            }
+        }
+        /* END To CRON */
+        $userObject = ConfService::getConfStorageImpl()->createUserObject($notification->getTarget());
+        if (!$userObject || empty($userObject) === true || empty($notification->getTarget()) === true) {
+            $messages = ConfService::getMessages();
+            throw new AJXP_Exception($messages['core.mailer.2']);
+        }
+        $notification_email_get =  $userObject->mergedRole->filterParameterValue("core.mailer","NOTIFICATIONS_EMAIL_GET", AJXP_REPO_SCOPE_ALL,"true");
+        $notification_email_frequency =  $userObject->mergedRole->filterParameterValue("core.mailer","NOTIFICATIONS_EMAIL_FREQUENCY", AJXP_REPO_SCOPE_ALL,"PT5M");
+        $notification_email =  $userObject->mergedRole->filterParameterValue("core.mailer","NOTIFICATIONS_EMAIL", AJXP_REPO_SCOPE_ALL,"");
+        //$notification_email_send_html =  $userObject->mergedRole->filterParameterValue("core.mailer","NOTIFICATIONS_EMAIL_SEND_HTML", AJXP_REPO_SCOPE_ALL,"true");
+        $arrayRecipent = explode(',', $notification_email);
+        if ($notification_email_get === "true" && count($arrayRecipent) > 0) {
+            $dateEvent = new DateTime("now");
+            $dateEvent->getTimestamp();
+            $dateEvent = $dateEvent->add(new DateInterval($notification_email_frequency))->getTimestamp();
+            dibi::connect($this->_dibiDriver);
+            foreach ($arrayRecipent as $recipent) {
+                try {
+                    dibi::query("INSERT INTO [ajxp_mail_queue] ([recipent],[url],[date_event],[notification_object]) VALUES (%s,%s,%s,%bin) ",
+                        trim($recipent),
+                        $notification->getNode()->getUrl(),
+                        $dateEvent,
+                        serialize($notification));
+                } catch (Exception $e) {
+                    var_dump($e->getMessage());
+                    new AJXP_Exception($e->getMessage());
+                }
+            }
+        } else {
+            $mailer = AJXP_PluginsService::getInstance()->getActivePluginsForType("mailer", true);
+            if ($mailer !== false) {
+                try {
+                    $mailer->sendMail(
+                        array($notification->getTarget()),
+                        $notification->getDescriptionShort(),
+                        $notification->getDescriptionLong(),
+                        $notification->getAuthor(),
+                        $notification->getMainLink()
+                    );
+                } catch (Exception $e) {
+                    throw new AJXP_Exception($e->getMessage());
+                }
             }
         }
     }
@@ -69,6 +160,7 @@ class AjxpMailer extends AJXP_Plugin
         $layout = ConfService::getCoreConf("BODY_LAYOUT", "mailer");
         $forceFrom = ConfService::getCoreConf("FORCE_UNIQUE_FROM", "mailer");
         $coreFrom = ConfService::getCoreConf("FROM", "mailer");
+
         if($forceFrom && $coreFrom != null){
             $coreFromName = ConfService::getCoreConf("FROM_NAME", "mailer");
             $from = array("adress" => $coreFrom, "name" => $coreFromName);
