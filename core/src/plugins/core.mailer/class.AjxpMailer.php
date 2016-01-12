@@ -108,7 +108,7 @@ class AjxpMailer extends AJXP_Plugin
         }
         /* END To CRON */
         $userObject = ConfService::getConfStorageImpl()->createUserObject($notification->getTarget());
-        if (!$userObject || empty($userObject) === true || empty($notification->getTarget()) === true) {
+        if (!$userObject || trim($userObject) === "" || trim($notification->getTarget()) === "") {
             $messages = ConfService::getMessages();
             throw new AJXP_Exception($messages['core.mailer.2']);
         }
