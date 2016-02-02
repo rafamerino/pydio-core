@@ -27,7 +27,9 @@ define('MEMCACHED_EXTENSION_LOADED', extension_loaded('memcached'));
 define('REDIS_EXTENSION_LOADED', extension_loaded('redis'));
 define('XCACHE_EXTENSION_LOADED', extension_loaded('xcache'));
 
-use \Doctrine\Common\Cache;
+require __DIR__ . "/doctrine/vendor/autoload.php";
+
+use Doctrine\Common\Cache;
 
 /**
  * Standard Memcache driver
