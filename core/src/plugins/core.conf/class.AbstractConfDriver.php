@@ -217,7 +217,8 @@ abstract class AbstractConfDriver extends AJXP_Plugin
     protected function pluginUsesBootConf($pluginId)
     {
         return ($pluginId == "core.conf" || strpos($pluginId, "conf.") === 0
-            || $pluginId == "core.auth" || strpos($pluginId, "auth.") === 0);
+          || $pluginId == "core.auth" || strpos($pluginId, "auth.") === 0
+          || $pluginId == "core.cache" || strpos($pluginId, "cache.") === 0);
     }
 
     /**
@@ -385,8 +386,7 @@ abstract class AbstractConfDriver extends AJXP_Plugin
      */
     public function createUserObject($userId)
     {
-        $kvCache = ConfService::getInstance()->getKeyValueCache();
-        $test = $kvCache->fetch("pydio:user:".$userId);
+        $test=CacheService::fetch("pydio:user:".$userId);
         if($test !== false && is_a($test, "AbstractAjxpUser")){
             if($test->personalRole == null){
                 $test->personalRole = $test->roles["AJXP_USR_/".$userId];
@@ -403,7 +403,7 @@ abstract class AbstractConfDriver extends AJXP_Plugin
         AuthService::updateAuthProvidedData($abstractUser);
         $args = array(&$abstractUser);
         AJXP_Controller::applyIncludeHook("include.user.updateUserObject", $args);
-        $kvCache->save("pydio:user:".$userId, $abstractUser);
+        CacheService::save("pydio:user:".$userId, $abstractUser);
         return $abstractUser;
     }
 
@@ -445,7 +445,7 @@ abstract class AbstractConfDriver extends AJXP_Plugin
      * @param string $repositoryId
      * @param string $rolePrefix
      * @param bool $countOnly
-     * @return AJXP_Role[]
+     * @return array An array of role ids
      */
     abstract public function getRolesForRepository($repositoryId, $rolePrefix = '', $countOnly = false);
     /**
@@ -453,7 +453,7 @@ abstract class AbstractConfDriver extends AJXP_Plugin
      * @param string $repositoryId
      * @param boolean $details
      * @param boolean $admin
-     * @return Integer|Array
+     * @return Integer|array
      */
     abstract public function countUsersForRepository($repositoryId, $details = false, $admin = false);
 
@@ -1086,8 +1086,13 @@ abstract class AbstractConfDriver extends AJXP_Plugin
             case "user_list_authorized_users" :
 
                 $defaultFormat = "html";
-
-                HTMLWriter::charsetHeader();
+                if(isSet($httpVars["format"]) && $httpVars["format"] == "xml"){
+                    header('Content-Type: text/xml; charset=UTF-8');
+                    header('Cache-Control: no-cache');
+                    print('<?xml version="1.0" encoding="UTF-8"?>');
+                }else{
+                    HTMLWriter::charsetHeader();
+                }
                 if (!ConfService::getAuthDriverImpl()->usersEditable()) {
                     break;
                 }
@@ -1203,12 +1208,14 @@ abstract class AbstractConfDriver extends AJXP_Plugin
                     if($userObject->getId() == $loggedUser->getId()) continue;
                     if ( ( !$userObject->hasParent() &&  ConfService::getCoreConf("ALLOW_CROSSUSERS_SHARING", "conf")) || $userObject->getParent() == $loggedUser->getId() ) {
                         $userLabel = ConfService::getUserPersonalParameter("USER_DISPLAY_NAME", $userObject, "core.conf", $userId);
+                        $userAvatar = ConfService::getUserPersonalParameter("avatar", $userObject, "core.conf", "");
                         //if($regexp != null && ! (preg_match("/$regexp/i", $userId) || preg_match("/$regexp/i", $userLabel)) ) continue;
                         $userDisplay = ($userLabel == $userId ? $userId : $userLabel . " ($userId)");
                         if (ConfService::getCoreConf("USERS_LIST_HIDE_LOGIN", "conf") == true && $userLabel != $userId) {
                             $userDisplay = $userLabel;
                         }
-                        $users .= "<li class='complete_user_entry' data-label=\"$userLabel\" data-entry_id='$userId'><span class='user_entry_label'>".$userDisplay."</span></li>";
+                        $userIsExternal = $userObject->hasParent() ? "true":"false";
+                        $users .= "<li class='complete_user_entry' data-external=\"$userIsExternal\" data-label=\"$userLabel\" data-avatar='$userAvatar' data-entry_id='$userId'><span class='user_entry_label'>".$userDisplay."</span></li>";
                         $index ++;
                     }
                     if($index == $limit) break;
@@ -1241,6 +1248,7 @@ abstract class AbstractConfDriver extends AJXP_Plugin
                 if (isSet($httpVars["tmp_file"])) {
                     $file = AJXP_Utils::getAjxpTmpDir()."/".AJXP_Utils::securePath($httpVars["tmp_file"]);
                     if (isSet($file)) {
+                        session_write_close();
                         header("Content-Type:image/png");
                         readfile($file);
                     }
@@ -1253,12 +1261,14 @@ abstract class AbstractConfDriver extends AJXP_Plugin
                     } else {
                         $context = array();
                     }
+                    session_write_close();
                     $this->loadBinary($context, AJXP_Utils::sanitize($httpVars["binary_id"], AJXP_SANITIZE_ALPHANUM));
                 }
             break;
 
             case "get_global_binary_param" :
 
+                session_write_close();
                 if (isSet($httpVars["tmp_file"])) {
                     $file = AJXP_Utils::getAjxpTmpDir()."/".AJXP_Utils::securePath($httpVars["tmp_file"]);
                     if (isSet($file)) {

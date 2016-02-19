@@ -22,6 +22,7 @@
 defined('AJXP_EXEC') or die( 'Access not allowed');
 
 require_once("class.PublicletCounter.php");
+require_once("class.ShareLink.php");
 
 class ShareStore {
 
@@ -34,6 +35,8 @@ class ShareStore {
      */
     var $confStorage;
 
+    var $shareMetaManager;
+
     public function __construct($downloadFolder, $hashMinLength = 32){
         $this->downloadFolder = $downloadFolder;
         $this->hashMinLength = $hashMinLength;
@@ -44,6 +47,21 @@ class ShareStore {
         }
     }
 
+    /**
+     * @return ShareMetaManager
+     */
+    public function getMetaManager(){
+        if(!isSet($this->shareMetaManager)){
+            require_once("class.ShareMetaManager.php");
+            $this->shareMetaManager = new ShareMetaManager($this);
+        }
+        return $this->shareMetaManager;
+    }
+
+    /**
+     * Create a share.php file in the download folder.
+     * @throws Exception
+     */
     private function createGenericLoader(){
         if(!is_file($this->downloadFolder."/share.php")){
             $loader_content = '<'.'?'.'php
@@ -65,7 +83,7 @@ class ShareStore {
 
     /**
      * @param String $parentRepositoryId
-     * @param Array $shareData
+     * @param array $shareData
      * @param string $type
      * @param String $existingHash
      * @param null $updateHash
@@ -116,6 +134,39 @@ class ShareStore {
 
     }
 
+    /**
+     * Initialize an empty ShareLink object.
+     * @return ShareLink
+     */
+    public function createEmptyShareObject(){
+        $shareObject = new ShareLink($this);
+        if(AuthService::usersEnabled()){
+            $shareObject->setOwnerId(AuthService::getLoggedUser()->getId());
+        }
+        return $shareObject;
+    }
+
+    /**
+     * Initialize a ShareLink from persisted data.
+     * @param string $hash
+     * @return ShareLink
+     * @throws Exception
+     */
+    public function loadShareObject($hash){
+        $data = $this->loadShare($hash);
+        if($data === false){
+            throw new Exception("Cannot find share with hash ".$hash);
+        }
+        $shareObject = new ShareLink($this, $data);
+        $shareObject->setHash($hash);
+        return $shareObject;
+    }
+
+    /**
+     * Load data persisted on DB or on publiclet files.
+     * @param $hash
+     * @return array|bool|mixed
+     */
     public function loadShare($hash){
 
         $dlFolder = $this->downloadFolder;
@@ -166,12 +217,25 @@ class ShareStore {
 
     }
 
+    /**
+     * Test if hash.php is a real file.
+     * @param string $hash
+     * @return bool
+     */
     public function shareIsLegacy($hash){
         $dlFolder = $this->downloadFolder;
         $file = $dlFolder."/".$hash.".php";
         return is_file($file);
     }
 
+    /**
+     * Update a single share property
+     * @param string $hash
+     * @param string $pName
+     * @param string $pValue
+     * @return bool
+     * @throws Exception
+     */
     public function updateShareProperty($hash, $pName, $pValue){
         if(!$this->sqlSupported) return false;
         $relatedObjectId = $this->confStorage->simpleStoreGet("share", $hash, "serial", $data);
@@ -183,11 +247,20 @@ class ShareStore {
         return false;
     }
 
+    /**
+     * List shares based on child repository ID;
+     * @param $repositoryId
+     * @return array
+     */
     public function findSharesForRepo($repositoryId){
         if(!$this->sqlSupported) return array();
         return $this->confStorage->simpleStoreList("share", null, "", "serial", '%"REPOSITORY";s:32:"'.$repositoryId.'"%');
     }
 
+    /**
+     * Update share type from legacy values to new ones.
+     * @param $shareData
+     */
     protected function updateShareType(&$shareData){
         if ( isSet($shareData["SHARE_TYPE"]) && $shareData["SHARE_TYPE"] == "publiclet" ) {
             $shareData["SHARE_TYPE"] = "file";
@@ -198,6 +271,14 @@ class ShareStore {
         }
     }
 
+    /**
+     * List all shares persisted in DB and on file.
+     * @param string $limitToUser
+     * @param string $parentRepository
+     * @param null $cursor
+     * @param null $shareType
+     * @return array
+     */
     public function listShares($limitToUser = '', $parentRepository = '', $cursor = null, $shareType = null){
 
         $dbLets = array();
@@ -278,8 +359,17 @@ class ShareStore {
         return $dbLets;
     }
 
-    public function testUserCanEditShare($userId){
+    /**
+     * @param string $userId Share OWNER user ID / Will be compared to the currently logged user ID
+     * @param array|null $shareData Share Data
+     * @return bool Wether currently logged user can view/edit this share or not.
+     * @throws Exception
+     */
+    public function testUserCanEditShare($userId, $shareData){
 
+        if($shareData !== null && isSet($shareData["SHARE_ACCESS"]) && $shareData["SHARE_ACCESS"] == "public"){
+            return true;
+        }
         if(empty($userId)){
             $mess = ConfService::getMessages();
             throw new Exception($mess["share_center.160"]);
@@ -301,7 +391,7 @@ class ShareStore {
      * @throws Exception
      * @return bool
      */
-    public function deleteShare($type, $element)
+    public function deleteShare($type, $element, $keepRepository = false)
     {
         $mess = ConfService::getMessages();
         AJXP_Logger::debug(__CLASS__, __FILE__, "Deleting shared element ".$type."-".$element);
@@ -309,18 +399,18 @@ class ShareStore {
         if ($type == "repository") {
             if(strpos($element, "repo-") === 0) $element = str_replace("repo-", "", $element);
             $repo = ConfService::getRepositoryById($element);
+            $share = $this->loadShare($element);
             if($repo == null) {
                 // Maybe a share has
-                $share = $this->loadShare($element);
                 if(is_array($share) && isSet($share["REPOSITORY"])){
                     $repo = ConfService::getRepositoryById($share["REPOSITORY"]);
                 }
                 if($repo == null){
-                    throw new Exception("Cannot find associated share");
+                    throw new Exception("repo-not-found");
                 }
                 $element = $share["REPOSITORY"];
             }
-            $this->testUserCanEditShare($repo->getOwner());
+            $this->testUserCanEditShare($repo->getOwner(), $repo->options);
             $res = ConfService::deleteRepository($element);
             if ($res == -1) {
                 throw new Exception($mess[427]);
@@ -329,7 +419,7 @@ class ShareStore {
                 if(isSet($share)){
                     $this->confStorage->simpleStoreClear("share", $element);
                 }else{
-                    $shares = self::findSharesForRepo($element);
+                    $shares = $this->findSharesForRepo($element);
                     if(count($shares)){
                         $keys = array_keys($shares);
                         $this->confStorage->simpleStoreClear("share", $keys[0]);
@@ -341,12 +431,14 @@ class ShareStore {
             $repoId = $minisiteData["REPOSITORY"];
             $repo = ConfService::getRepositoryById($repoId);
             if ($repo == null) {
-                return false;
+                throw new Exception('repo-not-found');
             }
-            $this->testUserCanEditShare($repo->getOwner());
-            $res = ConfService::deleteRepository($repoId);
-            if ($res == -1) {
-                throw new Exception($mess[427]);
+            $this->testUserCanEditShare($repo->getOwner(), $repo->options);
+            if(!$keepRepository){
+                $res = ConfService::deleteRepository($repoId);
+                if ($res == -1) {
+                    throw new Exception($mess[427]);
+                }
             }
             // Silently delete corresponding role if it exists
             AuthService::deleteRole("AJXP_SHARED-".$repoId);
@@ -364,11 +456,11 @@ class ShareStore {
                 $this->confStorage->simpleStoreClear("share", $element);
             }
         } else if ($type == "user") {
-            $this->testUserCanEditShare($element);
+            $this->testUserCanEditShare($element, array());
             AuthService::deleteUser($element);
         } else if ($type == "file") {
             $publicletData = $this->loadShare($element);
-            if (isSet($publicletData["OWNER_ID"]) && $this->testUserCanEditShare($publicletData["OWNER_ID"])) {
+            if (isSet($publicletData["OWNER_ID"]) && $this->testUserCanEditShare($publicletData["OWNER_ID"], $publicletData)) {
                 PublicletCounter::delete($element);
                 if(isSet($publicletData["PUBLICLET_PATH"]) && is_file($publicletData["PUBLICLET_PATH"])){
                     unlink($publicletData["PUBLICLET_PATH"]);
@@ -382,22 +474,145 @@ class ShareStore {
     }
 
     /**
-     * @param String $type
-     * @param String $element
-     * @param AJXP_Node $oldNode
-     * @param AJXP_Node $newNode
-     * @return bool
+     * @param AJXP_Node $baseNode
+     * @param bool $delete
+     * @param string $oldPath
+     * @param string $newPath
+     * @param string|null $parentRepositoryPath
      */
-    public function moveShareIfPossible($type, $element, $oldNode, $newNode){
-        if(!$this->sqlSupported) return false;
-        $this->confStorage->simpleStoreGet("share", $element, "serial", $data);
-        if($oldNode->isLeaf() && $type == "minisite" && is_array($data)){
-            $repo = ConfService::getRepositoryById($data["REPOSITORY"]);
-            $cFilter = $repo->getContentFilter();
-            if(isSet($cFilter)){
-                $cFilter->movePath($oldNode->getPath(), $newNode->getPath());
+    public function moveSharesFromMetaRecursive($baseNode, $delete = false, $oldPath, $newPath, $parentRepositoryPath = null){
+
+        // Find shares in children
+        try{
+            $result = $this->getMetaManager()->collectSharesIncludingChildren($baseNode);
+        }catch(Exception $e){
+            // Error while loading node, ignore
+            return;
+        }
+        $basePath = $baseNode->getPath();
+        foreach($result as $relativePath => $metadata){
+            if($relativePath == "/") {
+                $relativePath = "";
+            }
+            $changeOldNode = new AJXP_Node("pydio://".$baseNode->getRepositoryId().$oldPath.$relativePath);
+
+            foreach($metadata as $ownerId => $meta){
+                if(!isSet($meta["shares"])){
+                    continue;
+                }
+                $changeOldNode->setUser($ownerId);
+                /// do something
+                $changeNewNode = null;
+                if(!$delete){
+                    //$newPath = preg_replace('#^'.preg_quote($oldPath, '#').'#', $newPath, $path);
+                    $changeNewNode = new AJXP_Node("pydio://".$baseNode->getRepositoryId().$newPath.$relativePath);
+                    $changeNewNode->setUser($ownerId);
+                }
+                $collectedRepositories = array();
+                list($privateShares, $publicShares) = $this->moveSharesFromMeta($meta["shares"], $delete?"delete":"move", $changeOldNode, $changeNewNode, $collectedRepositories, $parentRepositoryPath);
+
+                if($basePath == "/"){
+                    // Just update target node!
+                    $changeMetaNode = new AJXP_Node("pydio://".$baseNode->getRepositoryId().$relativePath);
+                    $changeMetaNode->setUser($ownerId);
+                    $this->getMetaManager()->clearNodeMeta($changeMetaNode);
+                    if(count($privateShares)){
+                        $this->getMetaManager()->setNodeMeta($changeMetaNode, array("shares" => $privateShares), true);
+                    }
+                    if(count($publicShares)){
+                        $this->getMetaManager()->setNodeMeta($changeMetaNode, array("shares" => $privateShares), false);
+                    }
+                }else{
+                    $this->getMetaManager()->clearNodeMeta($changeOldNode);
+                    if(!$delete){
+                        if(count($privateShares)){
+                            $this->getMetaManager()->setNodeMeta($changeNewNode, array("shares" => $privateShares), true);
+                        }
+                        if(count($publicShares)){
+                            $this->getMetaManager()->setNodeMeta($changeNewNode, array("shares" => $privateShares), false);
+                        }
+                    }
+                }
+
+                foreach($collectedRepositories as $sharedRepoId => $parentRepositoryPath){
+                    $this->moveSharesFromMetaRecursive(new AJXP_Node("pydio://".$sharedRepoId."/"), $delete, $changeOldNode->getPath(), $changeNewNode->getPath(), $parentRepositoryPath);
+                }
+
             }
         }
+
+
+    }
+
+    /**
+     * @param array $shares
+     * @param String $operation
+     * @param AJXP_Node $oldNode
+     * @param AJXP_Node $newNode
+     * @param array $collectRepositories
+     * @param string|null $parentRepositoryPath
+     * @return array
+     * @throws Exception
+     */
+    public function moveSharesFromMeta($shares, $operation="move", $oldNode, $newNode=null, &$collectRepositories = array(), $parentRepositoryPath = null){
+
+        $privateShares = array();
+        $publicShares = array();
+        foreach($shares as $id => $data){
+            $type = $data["type"];
+            if($operation == "delete"){
+                $this->deleteShare($type, $id);
+                continue;
+            }
+
+            if($type == "minisite"){
+                $share = $this->loadShare($id);
+                $repo = ConfService::getRepositoryById($share["REPOSITORY"]);
+            }else if($type == "repository"){
+                $repo = ConfService::getRepositoryById($id);
+            }else if($type == "file"){
+                $publicLink = $this->loadShare($id);
+            }
+
+            if(isSet($repo)){
+                $cFilter = $repo->getContentFilter();
+                $path = $repo->getOption("PATH", true);
+                $save = false;
+                if(isSet($cFilter)){
+                    if($parentRepositoryPath !== null){
+                        $repo->addOption("PATH", $parentRepositoryPath);
+                    }else{
+                        $cFilter->movePath($oldNode->getPath(), $newNode->getPath());
+                        $repo->setContentFilter($cFilter);
+                    }
+                    $save = true;
+                }else if(!empty($path)){
+                    $path = preg_replace("#".preg_quote($oldNode->getPath(), "#")."$#", $newNode->getPath(), $path);
+                    $repo->addOption("PATH", $path);
+                    $save = true;
+                    $collectRepositories[$repo->getId()] = $path;
+                }
+                if($save){
+                    ConfService::getConfStorageImpl()->saveRepository($repo, true);
+                }
+                $access = $repo->getOption("SHARE_ACCESS");
+                if(!empty($access) && $access == "PUBLIC"){
+                    $publicShares[$id] = $data;
+                }else{
+                    $privateShares[$id] = $data;
+                }
+
+            } else {
+
+                if(isset($publicLink) && is_array($publicLink) && isSet($publicLink["FILE_PATH"])){
+                    $publicLink["FILE_PATH"] = str_replace($oldNode->getPath(), $newNode->getPath(), $publicLink["FILE_PATH"]);
+                    $this->deleteShare("file", $id);
+                    $this->storeShare($newNode->getRepositoryId(), $publicLink, "file", $id);
+                    $privateShares[$id] = $data;
+                }
+            }
+        }
+        return array($privateShares, $publicShares);
     }
 
     /**
@@ -418,19 +633,34 @@ class ShareStore {
                 $this->confStorage->simpleStoreGet("share", $element, "serial", $data);
                 if(is_array($data)) return true;
             }
-            return false;
         }
+        return false;
     }
 
 
+    /**
+     * Get download counter
+     * @param string $hash
+     * @return int
+     */
     public function getCurrentDownloadCounter($hash){
         return PublicletCounter::getCount($hash);
     }
 
+    /**
+     * Add a unit to the current download counter value.
+     * @param $hash
+     */
     public function incrementDownloadCounter($hash){
         PublicletCounter::increment($hash);
     }
 
+    /**
+     * Set the counter value to 0.
+     * @param string $hash
+     * @param string $userId
+     * @throws Exception
+     */
     public function resetDownloadCounter($hash, $userId){
         $data = $this->loadShare($hash);
         $repoId = $data["REPOSITORY"];
@@ -438,14 +668,101 @@ class ShareStore {
         if ($repo == null) {
             throw new Exception("Cannot find associated share");
         }
-        $this->testUserCanEditShare($repo->getOwner());
+        $this->testUserCanEditShare($repo->getOwner(), $repo->options);
         PublicletCounter::reset($hash);
     }
 
+    /**
+     * Check if share is expired
+     * @param string $hash
+     * @param array $data
+     * @return bool
+     */
     public function isShareExpired($hash, $data){
         return ($data["EXPIRE_TIME"] && time() > $data["EXPIRE_TIME"]) ||
         ($data["DOWNLOAD_LIMIT"] && $data["DOWNLOAD_LIMIT"]> 0 && $data["DOWNLOAD_LIMIT"] <= $this->getCurrentDownloadCounter($hash));
     }
+
+    /**
+     * Find all expired shares and remove them.
+     * @param bool|true $currentUser
+     * @return array
+     */
+    public function clearExpiredFiles($currentUser = true)
+    {
+        if($currentUser){
+            $loggedUser = AuthService::getLoggedUser();
+            $userId = $loggedUser->getId();
+            $originalUser = null;
+        }else{
+            $originalUser = AuthService::getLoggedUser()->getId();
+            $userId = null;
+        }
+        $deleted = array();
+        $switchBackToOriginal = false;
+
+        $publicLets = $this->listShares($currentUser? $userId: '');
+        foreach ($publicLets as $hash => $publicletData) {
+            if($publicletData === false) continue;
+            if ($currentUser && ( !isSet($publicletData["OWNER_ID"]) || $publicletData["OWNER_ID"] != $userId )) {
+                continue;
+            }
+            if( (isSet($publicletData["EXPIRE_TIME"]) && is_numeric($publicletData["EXPIRE_TIME"]) && $publicletData["EXPIRE_TIME"] > 0 && $publicletData["EXPIRE_TIME"] < time()) ||
+                (isSet($publicletData["DOWNLOAD_LIMIT"]) && $publicletData["DOWNLOAD_LIMIT"] > 0 && $publicletData["DOWNLOAD_LIMIT"] <= $publicletData["DOWNLOAD_COUNT"]) ) {
+                if(!$currentUser) $switchBackToOriginal = true;
+                $this->deleteExpiredPubliclet($hash, $publicletData);
+                $deleted[] = $publicletData["FILE_PATH"];
+
+            }
+        }
+        if($switchBackToOriginal){
+            AuthService::logUser($originalUser, "", true);
+        }
+        return $deleted;
+    }
+
+    /**
+     * Find all expired legacy publiclets and remove them.
+     * @param $elementId
+     * @param $data
+     * @throws Exception
+     */
+    private function deleteExpiredPubliclet($elementId, $data){
+
+        if(AuthService::getLoggedUser() == null ||  AuthService::getLoggedUser()->getId() != $data["OWNER_ID"]){
+            AuthService::logUser($data["OWNER_ID"], "", true);
+        }
+        $repoObject = $data["REPOSITORY"];
+        if(!is_a($repoObject, "Repository")) {
+            $repoObject = ConfService::getRepositoryById($data["REPOSITORY"]);
+        }
+        $repoLoaded = false;
+
+        if(!empty($repoObject)){
+            try{
+                ConfService::loadDriverForRepository($repoObject)->detectStreamWrapper(true);
+                $repoLoaded = true;
+            }catch (Exception $e){
+                // Cannot load this repository anymore.
+            }
+        }
+        if($repoLoaded){
+            AJXP_Controller::registryReset();
+            $ajxpNode = new AJXP_Node("pydio://".$repoObject->getId().$data["FILE_PATH"]);
+        }
+        $this->deleteShare("file", $elementId);
+        if(isSet($ajxpNode)){
+            try{
+                $this->getMetaManager()->removeShareFromMeta($ajxpNode, $elementId);
+            }catch (Exception $e){
+
+            }
+            gc_collect_cycles();
+        }
+
+    }
+
+
 
     /**
      * @param array $data

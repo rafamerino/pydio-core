@@ -33,12 +33,8 @@ header("Pragma: no-cache");
 //set_error_handler(array("AJXP_XMLWriter", "catchError"), E_ALL & ~E_NOTICE );
 //set_exception_handler(array("AJXP_XMLWriter", "catchException"));
 
-$pServ = AJXP_PluginsService::getInstance();
 ConfService::init();
-$confPlugin = ConfService::getInstance()->confPluginSoftLoad($pServ);
-$pServ->loadPluginsRegistry(AJXP_INSTALL_PATH."/plugins", $confPlugin);
 ConfService::start();
-
 
 $confStorageDriver = ConfService::getConfStorageImpl();
 require_once($confStorageDriver->getUserClassFileName());
@@ -146,7 +142,9 @@ if ($optRepoId !== false) {
             }
         }
     }
-    ConfService::switchRootDir($optRepoId, true);
+    try{
+        ConfService::switchRootDir($optRepoId, true);
+    }catch(AJXP_Exception $e){}
 } else {
     if ($optStatusFile) {
         file_put_contents($optStatusFile, "ERROR:You must pass a -r argument specifying either a repository id or alias");
@@ -169,11 +167,14 @@ if (AuthService::usersEnabled() && !empty($optUser)) {
     }
 
     if ($loggedUser != null) {
+        ConfService::switchRootDir($optRepoId, true);
+        /*
         $res = ConfService::switchUserToActiveRepository($loggedUser, $optRepoId);
         if (!$res) {
             AuthService::disconnect();
             $requireAuth = true;
         }
+        */
     }
     if (isset($loggingResult) && $loggingResult != 1) {
         AJXP_XMLWriter::header();

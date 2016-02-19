@@ -599,7 +599,7 @@ class AuthService
     {
         $loggedUser = self::getLoggedUser();
         if($loggedUser == null) return 0;
-        $acls = $loggedUser->mergedRole->listAcls();
+        $acls = $loggedUser->mergedRole->listAcls(true);
         foreach($acls as $key => $right){
             if (!empty($right) && ConfService::getRepositoryById($key) != null) return $key;
         }
@@ -1028,7 +1028,7 @@ class AuthService
                 call_user_func($loopCallback, $index);
             }
 
-            if ($paginated) {
+            if (empty($regexp) && $paginated) {
                 // Make sure to reload all children objects
                 foreach ($confDriver->getUserChildren($userId) as $childObject) {
                     $allUsers[$childObject->getId()] = $childObject;
@@ -1037,7 +1037,7 @@ class AuthService
         }
         self::$cacheRoles = false;
 
-        if ($paginated && $cleanLosts) {
+        if (empty($regexp) && $paginated && $cleanLosts) {
             // Remove 'lost' items (children without parents).
             foreach ($allUsers as $id => $object) {
                 if ($object->hasParent() && !array_key_exists($object->getParent(), $allUsers)) {
@@ -1147,7 +1147,7 @@ class AuthService
     public static function updateRole($roleObject, $userObject = null)
     {
         ConfService::getConfStorageImpl()->updateRole($roleObject, $userObject);
-        ConfService::getInstance()->getKeyValueCache()->deleteAll();
+        CacheService::deleteAll();
     }
     /**
      * Delete a role by its id
@@ -1158,7 +1158,7 @@ class AuthService
     public static function deleteRole($roleId)
     {
         ConfService::getConfStorageImpl()->deleteRole($roleId);
-        ConfService::getInstance()->getKeyValueCache()->deleteAll();
+        CacheService::deleteAll();
     }
 
     public static function filterPluginParameters($pluginId, $params, $repoId = null)

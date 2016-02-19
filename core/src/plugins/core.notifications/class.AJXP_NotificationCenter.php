@@ -136,7 +136,7 @@ class AJXP_NotificationCenter extends AJXP_Plugin
         if(!$this->eventStore) return array();
         $u = AuthService::getLoggedUser();
         if ($u == null) {
-            if($httpVars["format"] == "html") return array();
+            if($httpVars["format"] == "html" || $httpVars["format"] == "array") return array();
             AJXP_XMLWriter::header();
             AJXP_XMLWriter::close();
             return array();
@@ -341,7 +341,7 @@ class AJXP_NotificationCenter extends AJXP_Plugin
                     continue;
                 }
                 try {
-                    $node->loadNodeInfo();
+                    @$node->loadNodeInfo();
                 } catch (Exception $e) {
                     if($notification->alert_id){
                         $this->eventStore->dismissAlertById($notification->alert_id);

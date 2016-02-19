@@ -103,6 +103,7 @@ module.exports = function(grunt) {
                         'res/js/ui/prototype/class.MultiDownloader.js',
                         'res/js/ui/prototype/class.ActivityMonitor.js',
                         'res/js/ui/prototype/class.AjxpReactComponent.js',
+                        'res/js/ui/prototype/class.AjxpReactDialogLoader.js',
                         'res/js/ui/prototype/class.PydioUI.js',
                         'res/js/core/Pydio.js'
                     ]
@@ -141,6 +142,17 @@ module.exports = function(grunt) {
                         dest: 'node_modules/material-ui/lib/',
                         ext: '.js'
                     }]
+            },
+            pydio:{
+                files: [
+                    {
+                        expand: true,
+                        cwd: 'res/js/ui/reactjs/jsx',
+                        src: ['**/*.js'],
+                        dest: 'res/js/ui/reactjs/build/',
+                        ext: '.js'
+                    }
+                ]
             }
         },
         browserify: {
@@ -237,6 +249,7 @@ module.exports = function(grunt) {
                     'res/js/ui/prototype/class.MultiDownloader.js',
                     'res/js/ui/prototype/class.ActivityMonitor.js',
                     'res/js/ui/prototype/class.AjxpReactComponent.js',
+                    'res/js/ui/prototype/class.AjxpReactDialogLoader.js',
                     'res/js/ui/prototype/class.PydioUI.js',
                     'res/js/core/Pydio.js'
                 ],
@@ -261,6 +274,7 @@ module.exports = function(grunt) {
         'env:build',
         'browserify',
         'env:dev',
-        'uglify:nodejs'
+        'uglify:nodejs',
+        'babel:pydio'
     ]);
 };

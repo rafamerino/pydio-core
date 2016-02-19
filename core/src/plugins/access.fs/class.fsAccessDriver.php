@@ -113,14 +113,14 @@ class fsAccessDriver extends AbstractAccessDriver implements AjxpWrapperProvider
                 $obj = null;
             }
         } else {
-            if(PHP_OS == "Darwin") $option = "-sk";
+            if((PHP_OS == "Darwin") || (PHP_OS == "FreeBSD")) $option = "-sk";
             else $option = "-sb";
             $cmd = '/usr/bin/du '.$option.' ' . escapeshellarg($dir);
             $io = popen ( $cmd , 'r' );
             $size = fgets ( $io, 4096);
             $size = trim(str_replace($dir, "", $size));
             $size =  floatval($size);
-            if(PHP_OS == "Darwin") $size = $size * 1024;
+            if((PHP_OS == "Darwin") || (PHP_OS == "FreeBSD")) $size = $size * 1024;
             pclose ( $io );
         }
         if($size != -1){
@@ -1598,6 +1598,7 @@ class fsAccessDriver extends AbstractAccessDriver implements AjxpWrapperProvider
         $fullname = $data['filename'];
         $size = $data['size'];
         $realBase = AJXP_MetaStreamWrapper::getRealFSReference($this->urlBase);
+        $realBase = str_replace("\\", "/", $realBase);
         $repoName = $this->urlBase.str_replace($realBase, "", $fullname);
 
         $toNode = new AJXP_Node($repoName);
@@ -2049,6 +2050,24 @@ class fsAccessDriver extends AbstractAccessDriver implements AjxpWrapperProvider
             "DEFAULT_RIGHTS" => "");
         if ($repository->getOption("USE_SESSION_CREDENTIALS")===true) {
             $newOptions["ENCODED_CREDENTIALS"] = AJXP_Safe::getEncodedCredentialString();
+        }
+        $customData = array();
+        foreach ($httpVars as $key => $value) {
+            if (substr($key, 0, strlen("PLUGINS_DATA_")) == "PLUGINS_DATA_") {
+                $customData[substr($key, strlen("PLUGINS_DATA_"))] = $value;
+            }
+        }
+        if (count($customData)) {
+            $newOptions["PLUGINS_DATA"] = $customData;
+        }
+        if ($repository->getOption("META_SOURCES")) {
+            $newOptions["META_SOURCES"] = $repository->getOption("META_SOURCES");
+            foreach ($newOptions["META_SOURCES"] as $index => &$data) {
+                if (isSet($data["USE_SESSION_CREDENTIALS"]) && $data["USE_SESSION_CREDENTIALS"] === true) {
+                    $newOptions["META_SOURCES"][$index]["ENCODED_CREDENTIALS"] = AJXP_Safe::getEncodedCredentialString();
+                }
+            }
+            AJXP_Controller::applyHook("workspace.share_metasources", array(&$newOptions["META_SOURCES"]));
         }
         return $newOptions;
     }
