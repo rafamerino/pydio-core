@@ -42,13 +42,20 @@ class AjxpMailer extends AJXP_Plugin
             $p = ConfService::instanciatePluginFromGlobalParams($pConf, "AjxpMailer");
             AJXP_PluginsService::getInstance()->setPluginUniqueActiveForType($p->getType(), $p->getName(), $p);
         }
-        $this->_dibiDriver = AJXP_Utils::cleanDibiDriverParameters(array("group_switch_value"=>"core"));
     }
 
+    protected function getDibiDriver () {
+        if (!isset($this->_dibiDriver)) {
+            $this->_dibiDriver = AJXP_Utils::cleanDibiDriverParameters(array("group_switch_value"=>"core"));
+        }
+        return $this->_dibiDriver;
+    }
     public function mailConsumeQueue ($action, $httpVars, $fileVars) {
         if ($action === "consume_mail_queue") {
             $mailer = AJXP_PluginsService::getInstance()->getActivePluginsForType("mailer", true);
-            dibi::connect($this->_dibiDriver);
+            if (!dibi::isConnected()) {
+                dibi::connect($this->getDibiDriver());
+            }
             if($this->_dibiDriver["driver"] == "postgre"){
                 dibi::query("SET bytea_output=escape");
             }
@@ -125,7 +132,8 @@ class AjxpMailer extends AJXP_Plugin
             throw new AJXP_Exception($messages['core.mailer.2']);
         }
         $notification_email_get =  $userObject->mergedRole->filterParameterValue("core.mailer","NOTIFICATIONS_EMAIL_GET", AJXP_REPO_SCOPE_ALL,"true");
-        $notification_email_frequency =  $userObject->mergedRole->filterParameterValue("core.mailer","NOTIFICATIONS_EMAIL_FREQUENCY", AJXP_REPO_SCOPE_ALL,"PT5M");
+        $notification_email_frequency =  $userObject->mergedRole->filterParameterValue("core.mailer","NOTIFICATIONS_EMAIL_FREQUENCY", AJXP_REPO_SCOPE_ALL,"M");
+        $notification_email_frequency_user =  $userObject->mergedRole->filterParameterValue("core.mailer","NOTIFICATIONS_EMAIL_FREQUENCY_USER", AJXP_REPO_SCOPE_ALL,"5");
         $notification_email =  $userObject->mergedRole->filterParameterValue("core.mailer","NOTIFICATIONS_EMAIL", AJXP_REPO_SCOPE_ALL,"");
         $notification_email_send_html =  $userObject->mergedRole->filterParameterValue("core.mailer","NOTIFICATIONS_EMAIL_SEND_HTML", AJXP_REPO_SCOPE_ALL,"true");
         if ($notification_email_send_html === "true") {
@@ -134,17 +142,74 @@ class AjxpMailer extends AJXP_Plugin
             $html = 0;
         }
         $arrayRecipent = explode(',', $notification_email);
-        if ($notification_email_get === "true" && count($arrayRecipent) > 0) {
-            $dateEvent = new DateTime("now");
-            $dateEvent->getTimestamp();
-            $dateEvent = $dateEvent->add(new DateInterval($notification_email_frequency))->getTimestamp();
-            dibi::connect($this->_dibiDriver);
+        if ($notification_email_get === "true" && count($arrayRecipent) > 0 && !empty($notification_email_frequency_user)) {
+            $date = new DateTime("now");
+            $hour = $date->format('H');
+            $minute = $date->format('i');
+            $frequency = $notification_email_frequency_user;
+            switch ($notification_email_frequency) {
+                case "M":
+                    //FOR EVERY X MIN
+                    $allMinute = ($hour * 60) + $minute;
+                    $nextInterval = $allMinute - ($allMinute % $frequency) + $frequency;
+                    $nextInterval = $nextInterval - $frequency;
+                    $nextInterval = $nextInterval / 60;
+                    $nextIntervalDecimal = $nextInterval - (int)$nextInterval;
+                    $nextIntervalMinute = $nextIntervalDecimal * 60;
+                    $nextIntervalHour = (int)$nextInterval;
+                    $nextIntervalDate = new DateTime($nextIntervalHour . ':' . $nextIntervalMinute);
+                    $nextFrequency = $nextIntervalDate->modify('+' . $frequency . ' minutes')->format('Y-m-d H:i:s');
+                    break;
+                case "H":
+                    //FOR EVERY X HOUR
+                    $frequency = $frequency * 60;
+                    $allMinute = ($hour * 60) + $minute;
+                    $nextInterval = $allMinute - ($allMinute % $frequency) + $frequency;
+                    $nextInterval = $nextInterval - $frequency;
+                    $nextInterval = $nextInterval / 60;
+                    $nextIntervalDecimal = $nextInterval - (int)$nextInterval;
+                    $nextIntervalMinute = $nextIntervalDecimal * 60;
+                    $nextIntervalHour = (int)$nextInterval;
+                    $nextIntervalDate = new DateTime($nextIntervalHour . ':' . $nextIntervalMinute);
+                    $nextFrequency = $nextIntervalDate->modify('+' . $frequency . ' minutes')->format('Y-m-d H:i:s');
+                    break;
+                case "D1":
+                    $compareDate = new DateTime($date->format('d-m-Y') . ' ' . $frequency . ':00');
+                    if ($date > $compareDate) {
+                        //FREQUENCY ALREADY GONE, NEXT INTERVAL => NEXT DAY
+                        $compareDate = $compareDate->modify('+1 day');
+                    }
+                    $nextFrequency = $compareDate->format('Y-m-d ' . $frequency . ':00');
+                    break;
+                case "D2":
+                    //FOR EVERY DAY AT X and Y
+                    $arrayFrequency = explode(",", $notification_email_frequency_user);
+                    if (count($arrayFrequency) === 2) {
+                        $compareDate1 = new DateTime($date->format('d-m-Y') . ' ' . $arrayFrequency[0] . ':00');
+                        $compareDate2 = new DateTime($date->format('d-m-Y') . ' ' . $arrayFrequency[1] . ':00');
+                        if ($date < $compareDate1 && $date < $compareDate2) {
+                            $nextFrequency = $date->format('Y-m-d ' . $arrayFrequency[0] . ':00');
+                        } elseif ($date > $compareDate1 && $date < $compareDate2) {
+                            $nextFrequency = $date->format('Y-m-d ' . $arrayFrequency[1] . ':00');
+                        } else {
+                            $nextFrequency = $date->modify('+1 day')->format('Y-m-d ' . $arrayFrequency[0] . ':00');
+                        }
+                    }
+                    break;
+                case "W1":
+                    //FOR EVERY WEEK AT THE DAY
+                    $nextFrequency = $date->modify('next ' . $frequency)->format('Y-m-d 00:00:00');
+                    break;
+            }
+            if (!dibi::isConnected()) {
+                dibi::connect($this->getDibiDriver());
+            }
             foreach ($arrayRecipent as $recipent) {
                 try {
                     dibi::query("INSERT INTO [ajxp_mail_queue] ([recipent],[url],[date_event],[notification_object],[html]) VALUES (%s,%s,%s,%bin,%b) ",
                         trim($recipent),
                         $notification->getNode()->getUrl(),
-                        $dateEvent,
+                        $nextFrequency,
                         serialize($notification),
                         $html);
                 } catch (Exception $e) {
